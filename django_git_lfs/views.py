@@ -1,10 +1,15 @@
+from _ast import keyword
+import hashlib
 import json
+from django.core.files.uploadedfile import TemporaryUploadedFile
+from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.core.urlresolvers import reverse
 from django.http import JsonResponse, Http404, FileResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 from django.views.generic.detail import BaseDetailView
 from .models import *
+from .forms import LfsObjectForm
 
 
 class JsonUtilsMixin(object):
@@ -68,14 +73,26 @@ object_meta = csrf_exempt(ObjectMetaView.as_view())
 
 
 class ObjectDownloadView(BaseObjectDetailView):
+
+    def dispatch(self, request, *args, **kwargs):
+        try:
+            return super(ObjectDownloadView, self).dispatch(request, *args, **kwargs)
+        except Exception as e:
+            import traceback
+
+            print e
+            traceback.print_exc()
+            raise
+
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
-        return FileResponse(self.object.file.open('rb'))
+        self.object.file.open('rb')
+        return FileResponse(self.object.file)
 object_download = csrf_exempt(ObjectDownloadView.as_view())
 
 
 class ObjectVerifyView(JsonUtilsMixin, BaseObjectDetailView):
-    def get(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         self.object = self.get_object()
         request_json = self.json_request_body()
         if request_json is None:
@@ -104,7 +121,7 @@ class UploadInitView(JsonUtilsMixin, ExistingObjectMixin, GetLfsObjectMixin, Vie
             return self.json_response({
                 "_links": {
                     "upload": {
-                        "href": self.request.build_absolute_uri(reverse('lfs_object_upload')),
+                        "href": self.request.build_absolute_uri(reverse('lfs_object_upload', kwargs={"oid": request_json['oid']})),
                         "header": self.lfs_auth_headers(),
                     },
                     "verify": {
@@ -116,10 +133,42 @@ class UploadInitView(JsonUtilsMixin, ExistingObjectMixin, GetLfsObjectMixin, Vie
 object_upload_init = csrf_exempt(UploadInitView.as_view())
 
 
-class ObjectUploadView(View):
-    def http_method_not_allowed(self, request, *args, **kwargs):
-        print request.method
+class ObjectUploadView(JsonUtilsMixin, View):
+    CHUNK_SIZE = 1024 * 1024
 
     def put(self, request, *args, **kwargs):
-        print request.body
+        upload = TemporaryFileUploadHandler(self.request)
+        upload.new_file('lfs_upload.bin', 'lfs_upload.bin', 'application/octet-stream', -1)
+        hash = hashlib.sha256()
+
+        chunk = True
+        size = 0
+        while chunk:
+            chunk = request.read(self.CHUNK_SIZE)
+            upload.receive_data_chunk(chunk, size)
+            hash.update(chunk)
+            size += len(chunk)
+        upload.file_complete(size)
+
+        oid = self.kwargs.get('oid', '')
+        if hash.hexdigest() != oid:
+            return self.json_response({
+                'message': 'OID of request does not match file contents'
+            }, status=400)
+
+        upload.file.name = '%s.bin' % oid
+        form = LfsObjectForm(data={
+            'oid': oid,
+            'size': size,
+        }, files= {
+            'file': upload.file,
+        })
+        if not form.is_valid():
+            return self.json_response({
+                'message': 'Field Errors for: %s' % ', '.join(form.errors)
+            }, status=400)
+        lfsobject = form.save(commit=False)
+        # TODO: Add user and repository
+        lfsobject.save()
+        return HttpResponse()  # Just return Status 200
 object_upload = csrf_exempt(ObjectUploadView.as_view())

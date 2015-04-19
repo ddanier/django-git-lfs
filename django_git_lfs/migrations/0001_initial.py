@@ -20,7 +20,7 @@ class Migration(migrations.Migration):
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
                 ('created', models.DateTimeField(default=django.utils.timezone.now)),
                 ('expires', models.DateTimeField(default=django_git_lfs.models.default_expiration)),
-                ('token', models.CharField(default=django_git_lfs.models.generate_unique_access_token, max_length=32)),
+                ('token', models.CharField(default=django_git_lfs.models.generate_unique_access_token, unique=True, max_length=32)),
                 ('allow_read', models.BooleanField(default=False)),
                 ('allow_write', models.BooleanField(default=False)),
             ],
@@ -30,7 +30,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
                 ('created', models.DateTimeField(default=django.utils.timezone.now)),
-                ('oid', models.CharField(max_length=71)),
+                ('oid', models.CharField(unique=True, max_length=64)),
                 ('file', models.FileField(upload_to=b'lfs')),
                 ('size', models.PositiveIntegerField()),
             ],
@@ -40,7 +40,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
                 ('created', models.DateTimeField(default=django.utils.timezone.now)),
-                ('canonical', models.CharField(max_length=255)),
+                ('canonical', models.CharField(unique=True, max_length=255)),
             ],
         ),
         migrations.AddField(

@@ -9,7 +9,10 @@ import random
 class LfsRepository(models.Model):
     created = models.DateTimeField(default=now)
 
-    canonical = models.CharField(max_length=255)
+    canonical = models.CharField(max_length=255, unique=True)
+
+    def __unicode__(self):
+        return self.canonical
 
 
 def generate_unique_access_token():
@@ -29,20 +32,26 @@ class LfsAccess(models.Model):
     created = models.DateTimeField(default=now)
     expires = models.DateTimeField(default=default_expiration)
 
-    token = models.CharField(max_length=32, default=generate_unique_access_token)
+    token = models.CharField(max_length=32, default=generate_unique_access_token, unique=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True)
     repository = models.ForeignKey(LfsRepository)
 
     allow_read = models.BooleanField(default=False)
     allow_write = models.BooleanField(default=False)
 
+    def __unicode__(self):
+        return self.token
+
 
 class LfsObject(models.Model):
     created = models.DateTimeField(default=now)
 
-    oid = models.CharField(max_length=71)  # normal OID length
+    oid = models.CharField(max_length=64, unique=True)  # normal OID length (SHA256)
     file = models.FileField(upload_to='lfs')
     size = models.PositiveIntegerField()
 
     uploader = models.ForeignKey(settings.AUTH_USER_MODEL, null=True)
     repositories = models.ManyToManyField(LfsRepository)
+
+    def __unicode__(self):
+        return self.oid
