@@ -33,7 +33,7 @@ class LfsAccess(models.Model):
     expires = models.DateTimeField(default=default_expiration)
 
     token = models.CharField(max_length=32, default=generate_unique_access_token, unique=True)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True)
+    user = models.CharField(max_length=32, blank=True, null=True)
     repository = models.ForeignKey(LfsRepository)
 
     allow_read = models.BooleanField(default=False)
@@ -50,7 +50,7 @@ class LfsObject(models.Model):
     file = models.FileField(upload_to='lfs')
     size = models.PositiveIntegerField()
 
-    uploader = models.ForeignKey(settings.AUTH_USER_MODEL, null=True)
+    uploader = models.CharField(max_length=32, blank=True, null=True)
     repositories = models.ManyToManyField(LfsRepository)
 
     def __unicode__(self):

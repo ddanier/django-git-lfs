@@ -4,12 +4,13 @@ import json
 from django.core.files.uploadedfile import TemporaryUploadedFile
 from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.core.urlresolvers import reverse
-from django.http import JsonResponse, Http404, FileResponse, HttpResponse
+from django.http import JsonResponse, Http404, FileResponse, HttpResponse, HttpResponseForbidden
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 from django.views.generic.detail import BaseDetailView
 from .models import *
 from .forms import LfsObjectForm
+from django.conf import settings
 
 
 class JsonUtilsMixin(object):
@@ -172,3 +173,43 @@ class ObjectUploadView(JsonUtilsMixin, View):
         lfsobject.save()
         return HttpResponse()  # Just return Status 200
 object_upload = csrf_exempt(ObjectUploadView.as_view())
+
+
+class PermsView(JsonUtilsMixin, View):
+    def post(self, request, *args, **kwargs):
+        if request.META.get('HTTP_X_GIT_LFS_PERMS_TOKEN', '') != getattr(settings, 'LFS_PERMS_TOKEN', ''):
+            return HttpResponseForbidden('No valid perms token supplied')
+        request_json = self.json_request_body()
+        if request_json is None:
+            raise Http404()
+        if not request_json.get('repository', ''):
+            raise Http404()
+        if not request_json.get('user', ''):
+            raise Http404()
+        if not request_json.get('operation', '') in ('upload', 'download',):
+            raise Http404()
+        repository = LfsRepository.objects.get_or_create(canonical=request_json['repository'])[0]
+        try:
+            access = LfsAccess.objects.get(
+                user=request_json['user'],
+                repository=repository,
+                expires__gt=now(),
+            )
+            access.expires = default_expiration()
+        except LfsAccess.DoesNotExist:
+            access = LfsAccess(
+                user=request_json['user'],
+                repository=repository,
+            )
+        if request_json['operation'] == 'upload':
+            access.allow_write = True
+        if request_json['operation'] == 'download':
+            access.allow_read = True
+        access.save()
+        return self.json_response({
+            'header': {
+              'X-Git-LFS-Access-Token': access.token,
+            },
+            'href': request.build_absolute_uri(reverse('lfs_object_upload_init')),
+        })
+perms = csrf_exempt(PermsView.as_view())

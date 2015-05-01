@@ -3,6 +3,9 @@ from . import views
 
 
 urlpatterns = [
+    # manage permissions
+    url(r'^perms$', views.perms, name='lfs_perms'),
+
     # write access
     url(r'^objects$', views.object_upload_init, name='lfs_object_upload_init'),
     url(r'^objects/(?P<oid>[^/]+)/upload$', views.object_upload, name='lfs_object_upload'),
