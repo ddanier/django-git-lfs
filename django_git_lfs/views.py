@@ -74,17 +74,6 @@ object_meta = csrf_exempt(ObjectMetaView.as_view())
 
 
 class ObjectDownloadView(BaseObjectDetailView):
-
-    def dispatch(self, request, *args, **kwargs):
-        try:
-            return super(ObjectDownloadView, self).dispatch(request, *args, **kwargs)
-        except Exception as e:
-            import traceback
-
-            print e
-            traceback.print_exc()
-            raise
-
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
         self.object.file.open('rb')
