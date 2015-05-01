@@ -11,6 +11,12 @@ class LfsRepository(models.Model):
 
     canonical = models.CharField(max_length=255, unique=True)
 
+    @classmethod
+    def normalize_repo(cls, name):
+        if name.endswith('.git'):
+            name = name[:-4]
+        return name
+
     def __unicode__(self):
         return self.canonical
 
@@ -47,7 +53,7 @@ class LfsObject(models.Model):
     created = models.DateTimeField(default=now)
 
     oid = models.CharField(max_length=64, unique=True)  # normal OID length (SHA256)
-    file = models.FileField(upload_to='lfs')
+    file = models.FileField(upload_to='lfs')  # TODO: Make sure this will be uploaded to a private path
     size = models.PositiveIntegerField()
 
     uploader = models.CharField(max_length=32, blank=True, null=True)

@@ -29,9 +29,33 @@ class JsonUtilsMixin(object):
             return self._json_request_body
 
 
-class LfsAuthMixin(object):  # TODO!
-    def lfs_auth_headers(self):
-        return {}
+class LfsAccessMixin(object):
+    def auth_headers(self):
+        return {
+          'X-Git-LFS-Access-Token': self.access.token,
+        }
+
+    def ensure_read_allowed(self):
+        if not self.access.allow_read:
+            raise Http404()
+
+    def ensure_write_allowed(self):
+        if not self.access.allow_write:
+            raise Http404()
+
+
+class AuthMixin(LfsAccessMixin):
+    def dispatch(self, request, *args, **kwargs):
+        if not request.META.get('HTTP_X_GIT_LFS_ACCESS_TOKEN', ''):
+            raise Http404()
+        try:
+            self.access = LfsAccess.objects.get(
+                token=request.META['HTTP_X_GIT_LFS_ACCESS_TOKEN'],
+                expires__gt=now(),
+            )
+        except LfsAccess.DoesNotExist:
+            raise Http404()
+        return super(AuthMixin, self).dispatch(request, *args, **kwargs)
 
 
 class GetLfsObjectMixin(object):
@@ -49,7 +73,7 @@ class BaseObjectDetailView(GetLfsObjectMixin, BaseDetailView):
             raise Http404()
 
 
-class ExistingObjectMixin(LfsAuthMixin):
+class ExistingObjectMixin(object):
     def lfs_object_json(self, object):
         return {
           "oid": object.oid,
@@ -60,29 +84,32 @@ class ExistingObjectMixin(LfsAuthMixin):
             },
             "download": {
               "href": self.request.build_absolute_uri(reverse('lfs_object_download', kwargs={"oid": object.oid})),
-              "header": self.lfs_auth_headers(),
+              "header": self.auth_headers(),
             }
           }
         }
 
 
-class ObjectMetaView(JsonUtilsMixin, ExistingObjectMixin, BaseObjectDetailView):
+class ObjectMetaView(JsonUtilsMixin, ExistingObjectMixin, AuthMixin, BaseObjectDetailView):
     def get(self, request, *args, **kwargs):
+        self.ensure_read_allowed()
         self.object = self.get_object()
         return self.json_response(self.lfs_object_json(self.object))
 object_meta = csrf_exempt(ObjectMetaView.as_view())
 
 
-class ObjectDownloadView(BaseObjectDetailView):
+class ObjectDownloadView(AuthMixin, BaseObjectDetailView):
     def get(self, request, *args, **kwargs):
+        self.ensure_read_allowed()
         self.object = self.get_object()
         self.object.file.open('rb')
         return FileResponse(self.object.file)
 object_download = csrf_exempt(ObjectDownloadView.as_view())
 
 
-class ObjectVerifyView(JsonUtilsMixin, BaseObjectDetailView):
+class ObjectVerifyView(JsonUtilsMixin, AuthMixin, BaseObjectDetailView):
     def post(self, request, *args, **kwargs):
+        self.ensure_write_allowed()  # Verify is basically a read operation, but only necessary after a valid write
         self.object = self.get_object()
         request_json = self.json_request_body()
         if request_json is None:
@@ -95,8 +122,9 @@ class ObjectVerifyView(JsonUtilsMixin, BaseObjectDetailView):
 object_verify = csrf_exempt(ObjectVerifyView.as_view())
 
 
-class UploadInitView(JsonUtilsMixin, ExistingObjectMixin, GetLfsObjectMixin, View):
+class UploadInitView(JsonUtilsMixin, ExistingObjectMixin, GetLfsObjectMixin, AuthMixin, View):
     def post(self, request, *args, **kwargs):
+        self.ensure_write_allowed()
         request_json = self.json_request_body()
         if request_json is None:
             raise Http404()
@@ -106,27 +134,31 @@ class UploadInitView(JsonUtilsMixin, ExistingObjectMixin, GetLfsObjectMixin, Vie
             object = self.get_lfs_object(request_json['oid'])
             if request_json.get('size', -1) != object.size:
                 raise Http404()
+            if not object.repositories.filter(pk=self.access.repository.pk).exists():
+                # If the object is not yet bound to this repository, just add it
+                object.repositories.add(self.access.repository)
             return self.json_response(self.lfs_object_json(object))
         except LfsObject.DoesNotExist:
             return self.json_response({
                 "_links": {
                     "upload": {
                         "href": self.request.build_absolute_uri(reverse('lfs_object_upload', kwargs={"oid": request_json['oid']})),
-                        "header": self.lfs_auth_headers(),
+                        "header": self.auth_headers(),
                     },
                     "verify": {
                         "href": self.request.build_absolute_uri(reverse('lfs_object_verify', kwargs={"oid": request_json['oid']})),
-                        "header": self.lfs_auth_headers(),
+                        "header": self.auth_headers(),
                     },
                 }
             }, status=202)
 object_upload_init = csrf_exempt(UploadInitView.as_view())
 
 
-class ObjectUploadView(JsonUtilsMixin, View):
+class ObjectUploadView(JsonUtilsMixin, AuthMixin, View):
     CHUNK_SIZE = 1024 * 1024
 
     def put(self, request, *args, **kwargs):
+        self.ensure_write_allowed()
         upload = TemporaryFileUploadHandler(self.request)
         upload.new_file('lfs_upload.bin', 'lfs_upload.bin', 'application/octet-stream', -1)
         hash = hashlib.sha256()
@@ -158,13 +190,14 @@ class ObjectUploadView(JsonUtilsMixin, View):
                 'message': 'Field Errors for: %s' % ', '.join(form.errors)
             }, status=400)
         lfsobject = form.save(commit=False)
-        # TODO: Add user and repository
+        lfsobject.uploader = self.access.user
         lfsobject.save()
+        lfsobject.repositories.add(self.access.repository)
         return HttpResponse()  # Just return Status 200
 object_upload = csrf_exempt(ObjectUploadView.as_view())
 
 
-class PermsView(JsonUtilsMixin, View):
+class PermsView(JsonUtilsMixin, LfsAccessMixin, View):
     def post(self, request, *args, **kwargs):
         if request.META.get('HTTP_X_GIT_LFS_PERMS_TOKEN', '') != getattr(settings, 'LFS_PERMS_TOKEN', ''):
             return HttpResponseForbidden('No valid perms token supplied')
@@ -177,28 +210,28 @@ class PermsView(JsonUtilsMixin, View):
             raise Http404()
         if not request_json.get('operation', '') in ('upload', 'download',):
             raise Http404()
-        repository = LfsRepository.objects.get_or_create(canonical=request_json['repository'])[0]
+        repository = LfsRepository.objects.get_or_create(
+            canonical=LfsRepository.normalize_repo(request_json['repository']),
+        )[0]
         try:
-            access = LfsAccess.objects.get(
+            self.access = LfsAccess.objects.get(
                 user=request_json['user'],
                 repository=repository,
                 expires__gt=now(),
             )
-            access.expires = default_expiration()
+            self.access.expires = default_expiration()
         except LfsAccess.DoesNotExist:
-            access = LfsAccess(
+            self.access = LfsAccess(
                 user=request_json['user'],
                 repository=repository,
             )
         if request_json['operation'] == 'upload':
-            access.allow_write = True
+            self.access.allow_write = True
         if request_json['operation'] == 'download':
-            access.allow_read = True
-        access.save()
+            self.access.allow_read = True
+        self.access.save()
         return self.json_response({
-            'header': {
-              'X-Git-LFS-Access-Token': access.token,
-            },
-            'href': request.build_absolute_uri(reverse('lfs_object_upload_init')),
+            'header': self.auth_headers(),
+            'href': request.build_absolute_uri(reverse('lfs_base')),
         })
 perms = csrf_exempt(PermsView.as_view())

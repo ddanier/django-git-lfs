@@ -3,6 +3,9 @@ from . import views
 
 
 urlpatterns = [
+    # Base URL
+    url(r'^$', views.object_upload_init, name='lfs_base'),  # Does allow upload init, too
+
     # manage permissions
     url(r'^perms$', views.perms, name='lfs_perms'),
 
