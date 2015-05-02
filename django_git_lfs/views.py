@@ -33,6 +33,8 @@ class LfsAccessMixin(object):
     def auth_headers(self):
         return {
           'X-Git-LFS-Access-Token': self.access.token,
+          # Workaround for https://github.com/github/git-lfs/issues/243
+          'Authorization': 'Basic bm9uZTpuZWVkZWQ=',
         }
 
     def ensure_read_allowed(self):
